@@ -1,0 +1,6 @@
+.claude/
+__pycache__/
+*.pyc
+data/raw/
+spark-warehouse/
+.ipynb_checkpoints/
