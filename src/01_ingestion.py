@@ -6,11 +6,15 @@ je vire les doublons et les valeurs qui n'ont pas de sens, et j'ecris tout
 ca en Parquet dans une couche "Silver" partitionnee par departement.
 """
 
+# IMPORTS & CHEMIN
+
 import os
 import time
 from pyspark.sql import SparkSession
 
-# sous Windows si t'as pas ça Spark plante direct a l'ecriture (faut winutils.exe)
+
+# sous Windows Spark a besoin de winutils.exe pour gerer les permissions de fichiers,
+# sans ces 2 lignes ca plante direct a l'ecriture du Parquet
 os.environ["HADOOP_HOME"] = "C:\\hadoop"
 os.environ["PATH"] = os.environ["PATH"] + ";C:\\hadoop\\bin"
 from pyspark.sql import functions as F
@@ -18,10 +22,12 @@ from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType
 )
 
-# le script est dans src/, la racine du projet (data/, output/) est un cran au dessus
+# script dans src/,(data/, output/) son un dossier au dessus
 BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW_DIR    = os.path.join(BASE_DIR, "data", "raw")
 SILVER_DIR = os.path.join(BASE_DIR, "output", "silver")
+
+# ---------------------
 
 # local[*] = tous les coeurs de ma machine, 2g pour le driver ca passe large pour ce volume
 spark = (
@@ -39,9 +45,8 @@ print("  ONISR Pipeline — Etape 1 : Ingestion")
 print("  Spark UI : http://localhost:4040")
 print("=" * 60)
 
-# je declare les schemas a la main, pas d'inferSchema : sinon le departement "01"
-# devient l'entier 1 (le zero saute), et les coordonnees GPS ("48,8566") ont une
-# virgule que Spark sait pas lire comme un float tout seul, ça plante ou ça met null
+# schemas ecrits a la main, pas d'inferSchema : sinon "01" devient l'entier 1 (le zero saute) 
+# Pour les coordonnees GPS ("48,8566", virgule francaise) sont mal lues en nombre
 schema_carac = StructType([
     StructField("Num_Acc", StringType(),  True),  # identifiant accident, cle de jointure
     StructField("jour",    IntegerType(), True),
@@ -60,7 +65,7 @@ schema_carac = StructType([
     StructField("long",    StringType(),  True),
 ])
 
-# celui-la j'ai un peu moins pris le temps d'aligner, flemme
+# alignement moins soigne que le schema precedent (manuellement c'est chiant)
 schema_lieux = StructType([
     StructField("Num_Acc", StringType(), True),
     StructField("catr", IntegerType(), True),  # type de route
@@ -82,7 +87,7 @@ schema_lieux = StructType([
     StructField("vma", IntegerType(), True),  # vitesse limite
 ])
 
-# la flemme totale d'aligner celui-la, il est tard
+# pareil, pas realigne, ecrit plus vite (repetitif)
 schema_vehicules = StructType([
     StructField("Num_Acc", StringType(), True),
     StructField("id_vehicule", StringType(), True),
@@ -121,9 +126,9 @@ def lire_csv(nom_fichier, schema):
     return (
         spark.read
         .option("header", "true")
-        .option("sep", ";")           # separateur point-virgule, standard ONISR
-        .option("encoding", "latin1") # encodage des fichiers ONISR, sinon les accents partent en vrille
-        .option("nullValue", "")      # cellules vides -> null
+        .option("sep", ";")          
+        .option("encoding", "latin1") # encodage des fichiers ONISR, sinon les accents font n'importe quoi
+        .option("nullValue", "")      # cellules vides -> null (evite les creux)
         .schema(schema)
         .csv(chemin)
     )
@@ -133,6 +138,8 @@ df_lieux = lire_csv("lieux-2024.csv", schema_lieux)
 df_veh   = lire_csv("vehicules-2024.csv", schema_vehicules)
 df_usag  = lire_csv("usagers-2024.csv", schema_usagers)
 
+# petit coup d'oeil rapide avant de toucher a quoi que ce soit, histoire de voir
+# si le schema est bien passe et si les valeurs ont l'air coherentes
 print("\nSchéma de la table caracteristiques :")
 df_carac.printSchema()
 
@@ -142,30 +149,34 @@ df_carac.show(5, truncate=True)
 print("\nStatistiques sur les colonnes numériques :")
 df_carac.describe(["jour", "mois", "an", "lum", "agg", "atm", "col"]).show()
 
-# je compte avant nettoyage pour voir combien de lignes je vais perdre au final
-n_carac_brut = df_carac.count()
-n_lieux_brut = df_lieux.count()
-n_veh_brut   = df_veh.count()
-n_usag_brut  = df_usag.count()
+# Je fait un count avant nettoyage pour voir combien de lignes je vais perdre au final
+nb_carac_brut = df_carac.count()
+nb_lieux_brut = df_lieux.count()
+nb_veh_brut   = df_veh.count()
+nb_usag_brut  = df_usag.count()
 
 print(f"\nLignes brutes :")
-print(f"  caracteristiques : {n_carac_brut}")
-print(f"  lieux            : {n_lieux_brut}")
-print(f"  vehicules        : {n_veh_brut}")
-print(f"  usagers          : {n_usag_brut}")
+print(f"  caracteristiques : {nb_carac_brut}")
+print(f"  lieux            : {nb_lieux_brut}")
+print(f"  vehicules        : {nb_veh_brut}")
+print(f"  usagers          : {nb_usag_brut}")
 
-# Num_Acc identifie un accident de façon unique, donc dedoublonnage direct dessus
+
+## LE NETTOYAGE
+
+# Doublon 
 df_carac_clean = df_carac.dropDuplicates(["Num_Acc"])
+    # Num_Acc est l'id unique d'un accident, donc le dedoublonnage ce fait direct dessus (simple)
 
-# "1" -> "01" pour les départements a un chiffre, "971" reste intact
+# gestion num dep
 df_carac_clean = df_carac_clean.withColumn(
     "dep",
     F.when(F.length(F.col("dep")) == 1, F.lpad(F.col("dep"), 2, "0"))
      .otherwise(F.col("dep"))
 )
+    # "1" -> "01" pour les départements a un chiffre, "971" reste intact
 
-# hrmn est stocke soit "1430" soit "14:30" selon les années du fichier, va comprendre
-# pourquoi, du coup j'extrais juste l'heure et je gere les deux formats
+# gestion format heure
 df_carac_clean = df_carac_clean.withColumn(
     "heure",
     F.when(
@@ -176,42 +187,55 @@ df_carac_clean = df_carac_clean.withColumn(
         F.split(F.col("hrmn"), ":")[0].cast(IntegerType())
     ).otherwise(None)
 )
+    # hrmn est stocke soit "1430" soit "14:30" selon les années du fichier, (on sait pas pourquoi)
+    # du coup j'extrais juste l'heure et je gere les deux formats
 
-# code météo valide entre 1 et 9, tout le reste c'est une erreur de saisie du formulaire
+
+# Gestion code meteo (valeur aberrantes ou erronée) 
+    # --> nettoyage logique metier
 df_carac_clean = df_carac_clean.withColumn(
     "atm",
     F.when(F.col("atm").between(1, 9), F.col("atm")).otherwise(None)
 )
+    # code météo valide entre 1 et 9, tout le reste c'est une erreur de saisie du formulaire
 
-# df_carac_clean.filter(F.col("dep") == "75").count()  # test rapide pour verifier Paris, a virer avant le rendu
 
 df_usag_clean = df_usag.dropDuplicates()
+    # df_carac_clean.filter(F.col("dep") == "75").count()  # test pour verifier Paris rapidement (on laisse ? on vire ?)
+
 
 # gravite valide : 1=indemne, 2=tue, 3=hospitalise, 4=blesse leger
+  # --> nettoyage logique metier
 df_usag_clean = df_usag_clean.withColumn(
     "grav",
     F.when(F.col("grav").between(1, 4), F.col("grav")).otherwise(None)
 )
 
-# annee de naissance hors [1920-2010] = tres probablement une erreur de saisie
+
+# gestion années de naissances (valeur abberantes ou erreur)
 df_usag_clean = df_usag_clean.withColumn(
     "age",
     F.when(F.col("an_nais").between(1920, 2010), 2024 - F.col("an_nais"))
      .otherwise(None)
 )
+    # annee de naissance hors [1920-2010] = tres probablement une erreur de saisie  
 
+# meme logique que carac et usagers juste au dessus, je vire les doublons
 df_lieux_clean = df_lieux.dropDuplicates(["Num_Acc"])
 df_veh_clean   = df_veh.dropDuplicates()
 
 n_carac_clean = df_carac_clean.count()
 n_usag_clean  = df_usag_clean.count()
 
-print(f"\nBilan nettoyage :")
-print(f"  caracteristiques : {n_carac_brut:,} -> {n_carac_clean:,} ({n_carac_brut - n_carac_clean} lignes écartées)")
-print(f"  usagers          : {n_usag_brut:,} -> {n_usag_clean:,} ({n_usag_brut - n_usag_clean} lignes écartées)")
+print(f"\n Tout est clean :")
+print(f"  caracteristiques : {nb_carac_brut:,} -> {nb_carac_clean:,} ({nb_carac_brut - nb_carac_clean} lignes écartées)")
+print(f"  usagers          : {nb_usag_brut:,} -> {nb_usag_clean:,} ({nb_usag_brut - nb_usag_clean} lignes écartées)")
 
-# partitionne par dep -> un dossier par departement (output/silver/caracteristiques/dep=75/)
-# ca sert pour le partition pruning que je mesure dans 03_exploration.py
+
+## LE PARTITIONNEMENT
+
+# partitionne par dep --> un dossier par departement (output/silver/caracteristiques/dep=75/)
+# Sert pour le partition pruning --> mesure dans 03_exploration.py
 print("\n Ecriture couche Silver en Parquet")
 debut_ecriture = time.time()
 
@@ -234,7 +258,7 @@ df_veh_clean.write \
     .parquet(os.path.join(SILVER_DIR, "vehicules"))
 
 fin_ecriture = time.time()
-print(f"  Silver ecrit en {fin_ecriture - debut_ecriture:.1f}s")  # chiffre a remettre dans le rapport
+print(f"  Silver ecrit en {fin_ecriture - debut_ecriture:.1f}s")  # note a moi même --> oublie pas de mettre les chiffres dans le rapport
 print(f"  Localisation : {SILVER_DIR}/")
 print(f"  caracteristiques/ est partitionnee par dep= (un dossier par departement)")
 

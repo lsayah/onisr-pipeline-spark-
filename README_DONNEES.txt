@@ -1,54 +1,33 @@
-============================================================
-  TELECHARGEMENT DES DONNEES ONISR 2022
-============================================================
+Telechargement des donnees ONISR 2024
 
-1. Aller sur : https://www.data.gouv.fr
-   Chercher : "bases de donnees annuelles accidents corporels"
-
-2. Selectionner l'annee 2022.
-
+1. Aller sur https://www.data.gouv.fr et chercher "bases de donnees annuelles
+   accidents corporels"
+2. Selectionner l'annee 2024
 3. Telecharger les 4 fichiers CSV :
-     - carcteristiques-2022.csv   (attention : faute de frappe officielle)
-     - lieux-2022.csv
-     - vehicules-2022.csv
-     - usagers-2022.csv
-
-4. Copier les 4 fichiers dans le dossier :
-     Projet SPARK/data/raw/
-
-   Apres copie, la structure doit etre :
+     - caract-2024.csv
+     - lieux-2024.csv
+     - vehicules-2024.csv
+     - usagers-2024.csv
+4. Les mettre dans data/raw/ a la racine du projet :
      data/
        raw/
-         carcteristiques-2022.csv
-         lieux-2022.csv
-         vehicules-2022.csv
-         usagers-2022.csv
+         caract-2024.csv
+         lieux-2024.csv
+         vehicules-2024.csv
+         usagers-2024.csv
+5. Lancer les scripts dans l'ordre, depuis la racine du projet :
+     python src/01_ingestion.py
+     python src/02_analyses.py
+     python src/03_exploration.py
 
-5. Lancer les scripts dans l'ordre :
-     python 01_ingestion.py
-     python 02_analyses.py
-     python 03_exploration.py
+Notes :
+- separateur : point-virgule (;), pas une virgule
+- encodage : latin1, gere automatiquement par le script
+- si t'as une autre annee, faut changer les noms de fichiers directement
+  dans les appels a lire_csv() de src/01_ingestion.py (pas de detection
+  automatique)
 
-============================================================
-  NOTES IMPORTANTES
-============================================================
-
-- Separateur : point-virgule (;) — pas de virgule
-- Encodage   : latin1 (gere automatiquement par le script)
-- Annee      : on utilise 2022, les scripts cherchent *-2022.*
-
-Si vous avez une autre annee (2021, 2023), changez l'annee
-dans les fonctions trouver_fichier() des scripts.
-
-============================================================
-  EN CAS D'ERREUR JAVA / SPARK SUR WINDOWS
-============================================================
-
-Si vous voyez "JAVA_HOME not set" ou des erreurs Java :
-  1. Verifier que Java est installe : java -version
-  2. Si manquant, installer OpenJDK 17 depuis adoptium.net
-
-Si vous voyez des erreurs liees a "winutils" ou "hadoop" :
-  La plupart des operations locales fonctionnent sans winutils
-  avec PySpark 3.5. Si vous avez des erreurs specifiques,
-  notez le message exact et cherchez la solution.
+En cas d'erreur Java/Spark sous Windows :
+- verifier que Java est installe : java -version
+- si erreur liee a winutils/hadoop, voir le commentaire en haut de
+  src/01_ingestion.py (HADOOP_HOME)

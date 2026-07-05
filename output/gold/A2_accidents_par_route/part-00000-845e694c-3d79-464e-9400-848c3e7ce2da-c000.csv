@@ -1,0 +1,17 @@
+type_route,milieu,nb_accidents
+Voie communale,Agglomeration,21233
+Route departementale,Hors agglomeration,10507
+Route departementale,Agglomeration,10151
+Autoroute,Hors agglomeration,4940
+Route nationale,Hors agglomeration,2614
+Voie communale,Hors agglomeration,1677
+Autre,Agglomeration,1003
+Route nationale,Agglomeration,917
+Autre,Hors agglomeration,497
+Parc de stationnement,Agglomeration,393
+Autoroute,Agglomeration,152
+Autre,Agglomeration,130
+Autre,Hors agglomeration,86
+Parc de stationnement,Hors agglomeration,46
+Hors reseau public,Agglomeration,31
+Hors reseau public,Hors agglomeration,25
