@@ -14,7 +14,7 @@ from pyspark.sql import SparkSession
 
 
 # sous Windows Spark a besoin de winutils.exe pour gerer les permissions de fichiers,
-# sans ces 2 lignes ca plante direct a l'ecriture du Parquet
+# sans ces 2 lignes ca plante direct a l'ecriture du parquet
 os.environ["HADOOP_HOME"] = "C:\\hadoop"
 os.environ["PATH"] = os.environ["PATH"] + ";C:\\hadoop\\bin"
 from pyspark.sql import functions as F
@@ -41,7 +41,7 @@ spark = (
 spark.sparkContext.setLogLevel("WARN")
 
 print("=" * 60)
-print("  ONISR Pipeline — Etape 1 : Ingestion")
+print("  ONISR Pipeline, Etape 1 : Ingestion")
 print("  Spark UI : http://localhost:4040")
 print("=" * 60)
 

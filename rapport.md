@@ -27,6 +27,8 @@ Les colonnes cles que j'ai utilisees :
 - `catr` (lieux) : type de route (1=autoroute, 4=voie communale...)
 - `grav` (usagers) : gravite (1=indemne, 2=tue, 3=hospitalise, 4=blesse leger)
 
+7 colonnes en tout, largement suffisant pour repondre a mes 3 questions, pas besoin d'en prendre plus.
+
 ---
 
 ## 2. Pipeline Bronze / Silver / Gold
@@ -50,7 +52,7 @@ output/gold/A3_top_dep_par_mois/
 
 ### Pourquoi les Parquet plutot que les CSV ?
 
-Un CSV ça ce lit ligne par ligne, meme si on a besoin que d'une colonne. Les parquet stocke les donnees par colonne si on veut juste la gravité par exemple --> `grav`, on lit uniquement ce bloc. En plus, le schema est stocker dans le fichier donc on n'a pas besoin de le re-declarer a chaque fois, et en plus la compression est meilleure.
+Un CSV ça ce lit ligne par ligne, meme si on a besoin que d'une colonne. Les parquet stocke les donnees par colonne si on veut juste la gravité par exemple --> `grav`, on lit uniquement ce bloc. En plus, le schema est stocker dans le fichier donc on n'a pas besoin de le re-declarer a chaque fois, et en plus la compression est meilleure. Question de bon sens plus qu'un choix complique en vrai.
 
 ### Pourquoi partitionnement par departement ?
 
@@ -63,7 +65,7 @@ output/silver/caracteristiques/
     ...
 ```
 
-Quand on filtre sur un departement precis, Spark va directement dans ce dossier et ignore les autres. On mesure l'effet de ca dans l'etape 3 (partition pruning).
+Quand on filtre sur un departement precis, Spark va directement dans ce dossier et ignore les autres. On mesure l'effet de ca dans l'etape 3 (partition pruning). Simple a mettre en place pour un gain pas negligeable, ca valait le coup.
 
 ### Nettoyage (Doublon / Outliers / Null / Qualité de données)
 
@@ -74,9 +76,11 @@ Quand on filtre sur un departement precis, Spark va directement dans ce dossier 
 
 Aucun doublon detecte. Les donnees ONISR sont deja netoyée donc c'est beau, en même temp c'est ce qui est attendu pour un fichier officiel de data.gouv.fr. Le nettoyage a quand meme été fait car on ne sais jamais. c'est notre rôle de verifier et s'assurer de la qualité des données, peut importe la source.
 
-On a choisi de mettre les valeurs aberrantes a `null` et pas supprimer la ligne entiere. Car un accident même avec une meteo inconnue ça reste utile pour l'analyse sur les types de routes par exemple.
+On a choisi de mettre les valeurs aberrantes a `null` et pas supprimer la ligne entiere. Car un accident même avec une meteo inconnue ça reste utile pour l'analyse sur les types de routes par exemple. Petite decision perso, mais qui se defend je pense.
 
 ---
+
+
 
 ## 3. Les trois analyses
 
@@ -245,19 +249,29 @@ Cette capture vient de l'execution de `01_ingestion.py`. La Stage 29 fait le sca
 
 ![Liste des jobs](Documentation/screenshots/jobs_list.png)
 
-25 jobs au total sur cette execution de `01_ingestion.py` : chaque `count()` et chaque ecriture Parquet declenche son propre job. La plupart durent moins d'une seconde vu le volume (quelques dizaines de milliers de lignes).
+25 jobs au total sur cette execution de `01_ingestion.py` : chaque `count()` et chaque ecriture Parquet declenche son propre job. La plupart durent moins d'une seconde vu le volume (quelques dizaines de milliers de lignes). Sur le coup je m'attendais a moins de jobs, mais visiblement chaque petite action compte.
 
 ---
 
 ## 6. Exploration : Partition Pruning et Predicate Pushdown
 
-*(a completer avec les vrais chiffres apres avoir lance `03_exploration.py` et capture les metriques "number of files read" dans l'onglet SQL/DataFrame)*
+J'ai lance `src/03_exploration.py` sur la couche Silver `caracteristiques` (partitionnee par `dep`, 54 402 accidents au total, un dossier par departement sur le disque).
+
+**Test 1, sans filtre** : je compte tous les accidents. Spark doit ouvrir tous les dossiers de departement. Resultat : 3.635s. Le plan d'execution confirme `PartitionFilters: []`, aucun filtre applique, tout est lu.
+
+**Test 2, avec un filtre `dep='75'`** : 4 191 accidents a Paris, en 0.311s, soit **11.7x plus rapide** que le test 1. Le plan montre `PartitionFilters: [isnotnull(dep#15), (dep#15 = 75)]` : la preuve que Spark n'a ouvert que le dossier `dep=75/`, pas les autres.
+
+**Test 3, filtre `dep='75'` + `atm=4`** (neige/grele) : seulement 15 accidents, en 0.356s (logique, ca fait un croisement assez rare). Le plan montre les deux filtres en meme temps : `PartitionFilters: [...dep=75]` pour le partition pruning, et en plus `PushedFilters: [IsNotNull(atm), EqualTo(atm,4)]`. La colonne `atm` n'est pas dans le nom du dossier comme `dep`, mais Spark arrive quand meme a pousser ce filtre directement dans le lecteur Parquet, avant de charger les lignes en memoire.
+
+**Test 4, bonus AQE on/off** : 2.160s avec AQE contre 1.903s sans, sur un `groupBy(dep)`. Une petite difference, et pas dans le sens ou je m'y attendais au depart (je pensais que l'AQE serait plus rapide vu que c'est censer optimiser). Sur ce volume (54 402 lignes) l'AQE ajuste le nombre de partitions de shuffle, mais l'avantage se voit surtout sur des gros volumes avec plein de partitions vides à eviter. Ici c'est trop petit pour que ca change grand chose.
+
+**Ce que je retiens** : le partition pruning est de loin l'optimisation qui compte le plus ici, 11.7x plus rapide rien qu'en filtrant sur le bon departement. Le predicate pushdown aide en plus sur les colonnes qui ne sont pas dans le partitionnement. Les deux sont automatiques des que la couche Silver est bien partitionnee et que le filtre porte sur la bonne colonne, pas besoin de code special pour les activer.
 
 ---
 
-## 7. Ce qu'on a appris et les limites
+## 7. Leçons et limites
 
-### Ce qu'on a appris
+### Ce que j'ai appris
 
 Ecrire le schema a la main avec `StructType`, c'est long et un peu casse tête (c'est le genre de partie du code qu'on peux faire generer pour gagner du temp, mais attention) mais obligatoire ici. Sans ca, `"01"` devient `1` et je me retrouve avec des bugs silencieux dans mes jointures, sans meme m'en rendre compte au debut.
 
@@ -265,7 +279,7 @@ La lazy evaluation, ca change la maniere de coder. Je peux enchainer `filter`, `
 
 Le broadcast join, c'est 6 secondes contre 0.6 sur ce volume. La difference vient du fait que `lieux` est assez petite pour tenir en memoire, donc l'envoyer partout coute moins cher que de shuffler `carac`.
 
-La window function `DENSE_RANK()` classe par groupe sans perdre les lignes du detail. Un `GROUP BY` aurait tout regroupe et perdu l'info individuelle, la window function garde tout et rajoute juste le classement a cote.
+La window function `DENSE_RANK()` classe par groupe sans perdre les lignes du detail. Un `GROUP BY` aurait tout regroupe et perdu l'info individuelle, la window function garde tout et rajoute juste le classement a cote. Petit detail qui change tout au final, une fois qu'on l'a compris on peut plus s'en passer.
 
 ### Difficultes rencontrees
 
@@ -279,7 +293,7 @@ Et le fichier `usagers-2024.csv` avait une colonne en plus (`id_usager`) que mon
 
 ### Limites
 
-On travaille sur une seule annee (2024). Les observations sur la saisonnalite ou les tendances seraient plus solides avec plusieurs annees.
+On travaille sur une seule annee (2024). Les observations sur la saisonnalite ou les tendances seraient plus solides avec plusieurs annees, une annee ca reste un instantane, pas vraiment une tendance.
 
 Le fichier `usagers-2024.csv` a une colonne de plus que mon schema initial (`id_usager`). Je l'ai detecte grace au warning de Spark et corrige. Ca montre que les schemas ONISR evoluent d'une annee a l'autre, il faut verifier l'en-tete avant de coder.
 

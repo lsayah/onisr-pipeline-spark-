@@ -143,12 +143,13 @@ df_a2.coalesce(1).write \
 print("  -> Sauvegarde Gold : output/gold/A2_accidents_par_route/")
 
 
-## QUESTION 1
+## QUESTION 3 (windows function)
 
 print("\nANALYSE 3 : Top 5 departements accidentogenes par mois")
 
 # est ce que ce sont toujours les memes departements, ou ca change d'un mois a l'autre ?
-# pas de jointure ici, DENSE_RANK classe les deps a l'interieur de chaque mois
+# pas besoin de jointure ici --> DENSE_RANK classe les dep à l'interieur de chaque mois
+# (windows function --> "OVER")
 df_a3 = spark.sql("""
     SELECT mois, dep, nb_accidents, rang
     FROM (
@@ -156,7 +157,7 @@ df_a3 = spark.sql("""
             mois,
             dep,
             COUNT(Num_Acc) AS nb_accidents,
-            DENSE_RANK() OVER (PARTITION BY mois ORDER BY COUNT(Num_Acc) DESC) AS rang
+            DENSE_RANK() OVER (PARTITION BY mois ORDER BY COUNT(Num_Acc) DESC) AS rang 
         FROM carac
         WHERE mois IS NOT NULL
           AND dep  IS NOT NULL
@@ -165,6 +166,8 @@ df_a3 = spark.sql("""
     WHERE rang <= 5
     ORDER BY mois, rang
 """)
+# le GROUP BY fusionne d'abord mois+dep en une ligne avec le total d'accidents,
+# puis DENSE_RANK classe ces lignes sans les refusionner, en repartant a 1 a chaque mois
 
 df_a3.show(60, truncate=False)
 
@@ -215,9 +218,9 @@ df_carac.unpersist()
 df_lieux.unpersist()
 
 print("\n" + "=" * 60)
-print("  Etape 2 terminee. Resultats dans : output/gold/")
-print("  -> Ouvrir http://localhost:4040 MAINTENANT")
-print("  -> Onglet Jobs : regarder le job avec le plus de stages (A1 ou A2)")
+print("  Etape 2 Fini, resultats dans output/gold/")
+print("  faut que j'aille voir la Spark UI tout de suite (localhost:4040)")
+print("  je regarde le job avec le plus de stages, normalement A1 ou A2")
 print("=" * 60)
-input("\n  Entree quand t'as fini de regarder la Spark UI...")
+input("\n  Entrée quand fini de regarder Spark UI...")
 spark.stop()
