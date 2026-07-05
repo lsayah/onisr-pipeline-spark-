@@ -205,16 +205,16 @@ Extrait, mois 1 et 2 :
 
 Pour cette partie je voulais voir avec mes propres chiffres ce que le broadcast changeait vraiment, pas juste le lire dans un cours et hocher la tête. Test fait sur la jointure `caracteristiques` + `lieux` (54 402 lignes chacune, deux tables de taille comparable, idéal pour ce genre de comparaison).
 
-Sans rien toucher, Spark fait un **SortMergeJoin** : il redistribue les deux tables sur les coeurs selon `Num_Acc`, donc ça shuffle des deux côtés. Le `broadcast()` change ça : il envoie `lieux` en entier à chaque coeur direct, plus besoin de la bouger.
+Sans rien toucher, Spark fait un **SortMergeJoin** --> il redistribue les deux tables sur les coeurs selon `Num_Acc`, donc ça shuffle des deux côtés. Le `broadcast()` change ça => il envoie `lieux` en entier à chaque coeur direct, plus besoin de la bouger.
 
-Pour que la mesure soit propre j'ai désactivé le broadcast automatique de Spark (`autoBroadcastJoinThreshold = -1`, sinon Spark l'aurait fait tout seul vu que `lieux` est petite) et mis les deux tables en cache avant de lancer le chrono, histoire de pas mesurer la relectrue du Parquet en plus du join.
+Pour que la mesure soit propre j'ai désactivé le broadcast automatique de Spark (`autoBroadcastJoinThreshold = -1`, sinon Spark l'aurait fait tout seul vu que `lieux` est petite) et j'ai mis les deux tables en cache avant de lancer le chrono pour pas mesurer la relectrue du parquet en plus du join.
 
-Résultat, sans grande surprise sur la direction mais quand meme impressionnant en vrai :
+Résultat, sans grande surprise sur la direction mais quand même impressionnant en vrai :
 - join normal (SortMergeJoin) : 6.645s
 - join broadcast (BroadcastHashJoin) : 0.603s
-- gain : **90.9%** plus rapide avec le broadcast
+- gain =  **90.9%** plus rapide avec le broadcast
 
-Je m'attendais à un gain, pas à un facteur x11. Le plan d'execution confirme le changement de stratégie :
+Je m'attendais à un gain, pas à un facteur x11 (dingue). Le plan d'execution confirme le changement de stratégie :
 
 **Sans broadcast**, on voit deux `Exchange hashpartitioning` (un pour chaque table, donc le double du boulot) :
 ```
@@ -273,28 +273,28 @@ J'ai lancé `src/03_exploration.py` sur la couche Silver `caracteristiques` (par
 
 ### Ce que j'ai appris
 
---> Ecrire le schema a la main avec `StructType`, c'est long et un peu casse tête (c'est le genre de partie du code qu'on peux faire generer pour gagner du temp, mais attention) mais obligatoire ici. Sans ca, `"01"` devient `1` et je me retrouve avec des bugs silencieux dans mes jointures, sans meme m'en rendre compte au debut.
+--> Écrire le schéma à la main avec `StructType`, c'est long et un peu casse-tête (c'est le genre de partie du code qu'on peux faire générer pour gagner du temps, mais attention) mais obligatoire ici. Sans ça, `"01"` devient `1` et je me retrouve avec des bugs silencieux dans mes jointures, sans même m'en rendre compte au début.
 
---> La lazy evaluation, ca change la maniere de coder. Je peux enchainer `filter`, `join`, `groupBy` tant que je veux, rien ne se lance tant que je fais pas un `count()` ou un `write()`. C'est Spark qui choisit tout seul comment executer le tout a la fin.
+--> La lazy evaluation, ça change la manière de coder. Je peux enchaîner `filter`, `join`, `groupBy` tant que je veux, rien ne se lance tant que je fais pas un `count()` ou un `write()`. C'est Spark qui choisit tout seul comment exécuter le tout à la fin.
 
---> Le broadcast join, c'est 6 secondes contre 0.6 sur ce volume. La difference vient du fait que `lieux` est assez petite pour tenir en memoire, donc l'envoyer partout coute moins cher que de shuffler `carac`.
+--> Le broadcast join, c'est 6 secondes contre 0.6 sur ce volume. La différence vient du fait que `lieux` est assez petite pour tenir en mémoire, donc l'envoyer partout coûte moins cher que de shuffler `carac`.
 
---> La window function `DENSE_RANK()` classe par groupe sans perdre les lignes du detail. Un `GROUP BY` aurait tout regroupe et perdu l'info individuelle, la window function garde tout et rajoute juste le classement a cote. Petit detail qui change tout au final, une fois qu'on l'a compris on peut plus s'en passer.
+--> La window function `DENSE_RANK()` classe par groupe sans perdre les lignes du détail. Un `GROUP BY` aurait tout regroupé et perdu l'info individuelle, la window function garde tout et rajoute juste le classement à côté. Petit détail qui change tout au final, une fois qu'on l'a compris on peut plus s'en passer.
 
-### Difficultes rencontrees
+### Difficultés rencontrées
 
---> Le setup Windows a ete le premier obstacle, avant meme de toucher au code metier : Spark refuse d'ecrire quoi que ce soit tant que `HADOOP_HOME` et `winutils.exe` ne sont pas configures. J'ai perdu pas mal de temps a chercher pourquoi mon script plantait a l'ecriture du Parquet, avant de comprendre que c'est un probleme classique sous Windows et pas un bug dans mon code.
+--> Le setup Windows a été le premier obstacle, avant même de toucher au code métier : Spark refuse d'écrire quoi que ce soit tant que `HADOOP_HOME` et `winutils.exe` ne sont pas configurés. J'ai perdu pas mal de temps à chercher pourquoi mon script plantait à l'écriture du Parquet, avant de comprendre que c'est un problème classique sous Windows et pas un bug dans mon code.
 
---> La colonne `hrmn` (l'heure de l'accident) est stockee sous deux formats differents selon les lignes, "1430" et "14:30", sans raison apparente. J'ai du gerer les deux avec deux regex separees dans le meme `withColumn`, sinon une bonne partie des heures passait a `null`.
+--> La colonne `hrmn` (l'heure de l'accident) est stockée sous deux formats différents selon les lignes, "1430" et "14:30", sans raison apparente. J'ai dû gérer les deux avec deux regex séparées dans le même `withColumn`, sinon une bonne partie des heures passait à `null`.
 
---> Comprendre pourquoi rien ne s'affichait a l'ecran tant que je n'appelais pas `.count()` ou `.show()` m'a pris un moment. La lazy evaluation de Spark, ca surprend la premiere fois qu'on la rencontre en vrai (en cours ca reste assez abstrait).
+--> Comprendre pourquoi rien ne s'affichait à l'écran tant que je n'appelais pas `.count()` ou `.show()` m'a pris un moment. La lazy evaluation de Spark, ça surprend la première fois qu'on la rencontre en vrai (en cours ça reste assez abstrait).
 
---> Et le fichier `usagers-2024.csv` avait une colonne en plus (`id_usager`) que mon schema initial ne prevoyait pas. Repere grace a un warning de Spark au chargement, pas tout de suite evident a l'oeil nu vu le nombre de colonnes du fichier.
+--> Et le fichier `usagers-2024.csv` avait une colonne en plus (`id_usager`) que mon schéma initial ne prévoyait pas. Repéré grâce à un warning de Spark au chargement, pas tout de suite évident à l'oeil nu vu le nombre de colonnes du fichier.
 
 ### Limites
 
-On travaille sur une seule annee (2024). Les observations sur la saisonnalité ou les tendances seraient plus solides avec plusieurs années, une année ca reste leger, pas une vari tendance.
+On travaille sur une seule année (2024). Les observations sur la saisonnalité ou les tendances seraient plus solides avec plusieurs années, une année ca reste leger, pas une vari tendance.
 
-Le fichier `usagers-2024.csv` à une colonne de plus que mon schéma initial (`id_usager`). Je l'ai detecte grace au warning de Spark et corrige. Ca montre que les schemas ONISR évoluent d'une année a l'autre, il faut verifier l'en-tete avant de coder.
+Le fichier `usagers-2024.csv` à une colonne de plus que mon schéma initial (`id_usager`). Je l'ai détecté grâce au warning de Spark et corrigé. Ça montre que les schémas ONISR évoluent d'une année à l'autre, il faut vérifier l'en-tête avant de coder.
 
-Tous les tests sont en mode `local[*]` sur une seule machine. Les gains mesures (broadcast, partition pruning) seraient differents sur un vrai cluster Spark distribue ou le reseau entre les machines est le vrai goulot d'etranglement.
+Tous les tests sont en mode `local[*]` sur une seule machine. Les gains mesurés (broadcast, partition pruning) seraient différents sur un vrai cluster Spark distribué où le réseau entre les machines est le vrai goulot d'étranglement.
